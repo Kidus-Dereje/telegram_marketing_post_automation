@@ -1,0 +1,535 @@
+{
+  "name": "Telegram Social Media Posting Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -400,
+        -96
+      ],
+      "id": "3d7c60b9-0993-4dc3-a618-334e1cf5f5e8",
+      "name": "Telegram Trigger",
+      "webhookId": "46ebb541-628f-44f8-b22a-b704b8f9ac21"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the largest photo (highest quality)\nconst photos = $input.first().json.message.photo;\nconst largestPhoto = photos[photos.length - 1];\nreturn {\n  fileId: largestPhoto.file_id,\n  fileUniqueId: largestPhoto.file_unique_id,\n  width: largestPhoto.width,\n  height: largestPhoto.height,\n  chatId: $input.first().json.message.chat.id,\n  userId: $input.first().json.message.from.id\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        -96
+      ],
+      "id": "fc1ef624-5919-4217-9b80-2899fd66cf00",
+      "name": "Extract Image Details"
+    },
+    {
+      "parameters": {
+        "type": "detectText",
+        "binaryData": true,
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.awsRekognition",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -96
+      ],
+      "id": "e56bb114-df1a-4ae1-bf23-2299e90666ef",
+      "name": "Analyze image1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const detections = $input.first().json.TextDetections\n || [];\n// Step 1: Extract and clean detected texts\nlet texts = detections\n  .map(d => d.DetectedText?.trim())\n  .filter(t => t && t.length > 1);\n\n// Step 2: Deduplicate (case-insensitive)\ntexts = [...new Set(texts.map(t => t.toLowerCase()))]\n  .map(t => detections.map(d => d.DetectedText).find(orig => orig.toLowerCase() === t));\n\n// Step 3: Sort by length (longest first)\ntexts.sort((a, b) => b.length - a.length);\n\n// Step 4: Remove words/phrases that are substrings of longer ones\nconst filtered = texts.filter((text, i) => {\n  return !texts.some((other, j) => j < i && other.toLowerCase().includes(text.toLowerCase()));\n});\n\n// Step 5: Return unique, meaningful phrases\nreturn [\n  {\n    json: {\n      uniqueTexts: filtered\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        -96
+      ],
+      "id": "93d988ec-7221-4572-b43a-42757eb75455",
+      "name": "Extract Unique Texts"
+    },
+    {
+      "parameters": {
+        "operation": "bing_images",
+        "q": "={{ $json.searchQuery }}",
+        "additionalFields": {},
+        "requestOptions": {}
+      },
+      "type": "n8n-nodes-serpapi.serpApi",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        -96
+      ],
+      "id": "29f13a05-0667-41e8-afeb-8ff322ac12f6",
+      "name": "Bing_images search"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the LLM response\nconst response = $input.first().json.text;\nconst lines = response.split('\\n');\n\n// Extract brand\nconst brand = lines.find(l => l.includes('BRAND:'))\n  ?.replace('BRAND:', '')\n  .trim() || 'Unknown Brand';\n\n// Extract type\nconst type = lines.find(l => l.includes('TYPE:'))\n  ?.replace('TYPE:', '')\n  .trim() || 'Product';\n\n// Extract model number (optional)\nconst model = lines.find(l => l.toLowerCase().includes('model number:'))\n  ?.replace(/model number:/i, '')\n  .trim() || null;\n\n// Extract specs\nconst specsStart = lines.findIndex(l => l.includes('SPECS:'));\nconst specs = lines\n  .slice(specsStart + 1)\n  .filter(l => l.trim().startsWith('-'))\n  .map(l => l.trim().replace(/^-\\s*/, ''));\n\n// Build search query — include model number if available\nlet searchQuery = `${brand} ${type}`;\nif (model) searchQuery += ` ${model}`;\nsearchQuery += ` white background product photography`;\n\nreturn {\n  brand,\n  type,\n  model,\n  specs,\n  searchQuery\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -96
+      ],
+      "id": "10ed5656-d07e-408d-a126-4a75c53b0bfb",
+      "name": "Parse Response"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\n\nif (!response.images_results || response.images_results.length === 0) {\n  throw new Error('No images found for this product');\n}\n\n// Extract top 3 images\nconst topThreeImages = response.images_results.slice(0, 3).map((image, index) => ({\n  imageUrl: image.original,\n  title: image.title,\n  index: index + 1  // Image 1, 2, 3\n}));\n\nreturn {\n  images: topThreeImages\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        -96
+      ],
+      "id": "0e355b77-251a-4ecf-b84c-0e3e9215c781",
+      "name": "Extract Top 3 Images"
+    },
+    {
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "={{ $node['Extract Image Details'].json.chatId }}",
+        "binaryData": true,
+        "binaryPropertyName": "data2",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2016,
+        -96
+      ],
+      "id": "63dd9a95-8092-4a86-9b3a-930a03a8e115",
+      "name": "Send a photo message",
+      "webhookId": "0a22927d-4a80-4690-a575-b8bf5255efe3",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $node['Extract Image Details'].json.chatId }}",
+        "text": "={{ $json.caption }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2624,
+        -96
+      ],
+      "id": "a9fbefdb-533e-4a3f-911f-dff13c8e483d",
+      "name": "Send a text message",
+      "webhookId": "83e45dc6-156e-49a7-9ca7-1d050d239c6e"
+    },
+    {
+      "parameters": {
+        "jsCode": "const brand = $('Parse Response').first().json.brand;\nconst type = $('Parse Response').first().json.type;\nconst specs = $('Parse Response').first().json.specs;\n\nlet caption = `*${brand}*\\n`;\ncaption += `${type}\\n\\n`;\ncaption += `*Technical Specifications:*\\n`;\n\nspecs.forEach((spec, index) => {\n  caption += `${index + 1}. ${spec}\\n`;\n});\n\nreturn {\n  caption: caption\n  // parseMode: 'Markdown'\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2384,
+        -96
+      ],
+      "id": "e71ac8c2-3c66-42bc-80a1-727ec44333cf",
+      "name": "Format Caption"
+    },
+    {
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "={{ $node['Extract Image Details'].json.chatId }}",
+        "binaryData": true,
+        "binaryPropertyName": "data3",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2016,
+        48
+      ],
+      "id": "80ef0f44-346e-4b87-845c-3477380a8f43",
+      "name": "Send a photo message1",
+      "webhookId": "0a22927d-4a80-4690-a575-b8bf5255efe3",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "={{ $node['Extract Image Details'].json.chatId }}",
+        "binaryData": true,
+        "binaryPropertyName": "data1",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2016,
+        -240
+      ],
+      "id": "f12b643a-e30f-48ef-b9d0-4e2559349a93",
+      "name": "Send a photo message2",
+      "webhookId": "0a22927d-4a80-4690-a575-b8bf5255efe3",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2176,
+        -112
+      ],
+      "id": "74383a91-e193-4173-a242-b179979198ab",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.images[0].imageUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data1"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -240
+      ],
+      "id": "aa9aaff1-0e88-4138-83d6-9c1adddd8456",
+      "name": "Download Image 1",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.images[1].imageUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data2"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -96
+      ],
+      "id": "14489db2-1330-4bfe-8b9a-68b5a66a43de",
+      "name": "Download Image 2",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.images[2].imageUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data3"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        48
+      ],
+      "id": "e9960b8e-897b-4c0d-a44c-4bc07698695d",
+      "name": "Download Image 3",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analyze the following text list related to a product and provide:\n1. Brand Name (detect from text, or say \"Unknown Brand\" if not visible)\n2. Product Type (e.g., Coffee Grinding Machine)\n3. Technical Specifications (list 4–6 key specs based on the text)\n\nTry to look for anything that might be related to the model of the product so you can include it in the specs.\n\nFormat your response exactly as:\n\nBRAND: [brand name]\nTYPE: [product type]\nSPECS:\n- [spec 1]\n- [spec 2]\n- [spec 3]\n- [spec 4]\n- [spec 5]\n\n {{ $json.uniqueTexts }}",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        768,
+        -96
+      ],
+      "id": "6de69665-31cf-4338-ab46-dd1677ea8347",
+      "name": "Basic LLM Chain"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-20b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        768,
+        96
+      ],
+      "id": "867f8dd3-09ff-453f-b2e2-2216bbb6559f",
+      "name": "Groq Chat Model1"
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.fileId }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -16,
+        -96
+      ],
+      "id": "00922890-7a68-4e4a-99ca-52f44cdb47bf",
+      "name": "Get a file",
+      "webhookId": "3fb9488b-4edb-4992-ad42-74d96ae1c8a5"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Image Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Image Details": {
+      "main": [
+        [
+          {
+            "node": "Get a file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze image1": {
+      "main": [
+        [
+          {
+            "node": "Extract Unique Texts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Unique Texts": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Bing_images search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bing_images search": {
+      "main": [
+        [
+          {
+            "node": "Extract Top 3 Images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Top 3 Images": {
+      "main": [
+        [
+          {
+            "node": "Download Image 3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Download Image 1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Download Image 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a photo message": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Format Caption": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a photo message2": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a photo message1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Format Caption",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Image 1": {
+      "main": [
+        [
+          {
+            "node": "Send a photo message2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Image 2": {
+      "main": [
+        [
+          {
+            "node": "Send a photo message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Image 3": {
+      "main": [
+        [
+          {
+            "node": "Send a photo message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a file": {
+      "main": [
+        [
+          {
+            "node": "Analyze image1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "0fd554cd-f92f-4f9b-907f-e0a3b0fd5fe3",
+  "id": "arYze4Nmf9g6dv2p",
+  "tags": []
+}
